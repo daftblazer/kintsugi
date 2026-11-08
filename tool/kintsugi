@@ -1,0 +1,75 @@
+#!/bin/bash
+# Kintsugi: a Steam compatibility tool that runs a native engine (a recompiled or rewritten
+# port) in place of the Windows game, like Proton would run the .exe.
+#
+# Steam calls: kintsugi <verb> <the game's command line...>, with SteamAppId and
+# STEAM_COMPAT_INSTALL_PATH (the game folder) in the environment. For the "run" verbs this
+# starts $KINTSUGI_ENGINES/<appid>/run <game folder> (default engines folder:
+# ~/.local/share/kintsugi/engines); its output goes to ~/.local/state/kintsugi/<appid>.log.
+# An engine listed in engines.tsv is downloaded on the first start and updated at most once a day
+# (KINTSUGI_UPDATE=0: never), see kintsugi-engine.
+# Other verbs (path queries, Steam's install-script runs) have nothing to do for a native engine.
+set -u
+verb=${1:-}
+shift || true
+
+state=${XDG_STATE_HOME:-$HOME/.local/state}/kintsugi
+mkdir -p "$state"
+log() { printf '%s %s\n' "$(date '+%F %T')" "$*" >> "$state/kintsugi.log"; }
+
+appid=${SteamAppId:-${STEAM_COMPAT_APP_ID:-${SteamGameId:-}}}
+log "verb=$verb appid=$appid args=$*"
+
+case $verb in
+    waitforexitandrun|run) ;;
+    getcompatpath|getnativepath) printf '%s\n' "$@"; exit 0 ;;   # paths are already native
+    *) exit 0 ;;
+esac
+
+# Steam runs Windows install scripts (redistributables) through the tool first: nothing to install
+for a in "$@"; do
+    case $a in *iscriptevaluator*) log "skipping install script"; exit 0 ;; esac
+done
+
+# the game folder: Steam's, else the folder of the .exe on the command line
+game=${STEAM_COMPAT_INSTALL_PATH:-}
+if [ -z "$game" ]; then
+    for a in "$@"; do case $a in *.exe|*.EXE) game=$(dirname "$a"); break ;; esac; done
+fi
+
+engines=${KINTSUGI_ENGINES:-${XDG_DATA_HOME:-$HOME/.local/share}/kintsugi/engines}
+engine=$engines/$appid/run
+here=$(cd "$(dirname "$0")" && pwd)
+known() { [ -n "$appid" ] && grep -q "^$appid	" "${KINTSUGI_ENGINE_LIST:-$here/engines.tsv}" 2>/dev/null; }
+if [ ! -x "$engine" ] && known; then
+    # first start: download the engine
+    log "installing the engine for $appid"
+    "$here/kintsugi-engine" install "$appid" >> "$state/kintsugi.log" 2>&1 && touch "$state/$appid.update-check" \
+        || log "engine install failed"
+elif [ -f "$engines/$appid/.kintsugi-release" ] && [ "${KINTSUGI_UPDATE:-1}" != 0 ]; then
+    # installed from a release: look for a newer one at most once a day; offline is fine
+    stamp=$state/$appid.update-check
+    if [ -z "$(find "$stamp" -mmin -1440 2>/dev/null)" ]; then
+        touch "$stamp"
+        "$here/kintsugi-engine" update "$appid" >> "$state/kintsugi.log" 2>&1 || log "update check failed, starting the installed engine"
+    fi
+fi
+if [ -z "$appid" ] || [ ! -x "$engine" ]; then
+    log "no engine for app '$appid' (looked for $engine)"
+    exit 1
+fi
+
+log "starting $engine in '$game'"
+export KINTSUGI_APPID=$appid KINTSUGI_GAME_DIR=$game KINTSUGI_ENGINE_DIR=$engines/$appid
+mv -f "$state/$appid.log" "$state/$appid.prev.log" 2>/dev/null
+"$engine" "$game" "$@" > "$state/$appid.log" 2>&1 &
+pid=$!
+# Steam stops a game by signalling this process: pass it on to the engine
+trap 'kill -TERM $pid 2>/dev/null' TERM INT HUP
+while :; do
+    wait $pid
+    status=$?
+    kill -0 $pid 2>/dev/null || break   # wait returned for a trapped signal: keep waiting
+done
+log "engine for $appid exited with $status"
+exit $status

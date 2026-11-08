@@ -1,0 +1,87 @@
+#!/bin/bash
+# kintsugi-engine: install and update Kintsugi's engines.
+#   kintsugi-engine list                     known engines and what is installed
+#   kintsugi-engine install <appid> [tag]    download the latest (or that) release for this machine
+#   kintsugi-engine update [appid...]        install newer releases of installed engines (all without appid)
+#   kintsugi-engine remove <appid>
+# Engines go to $KINTSUGI_ENGINES (default ~/.local/share/kintsugi/engines)/<appid>. Releases come from the
+# GitHub repositories in engines.tsv next to this script; an engine is replaced only after its download is
+# checked against the release's .sha256, and never in place (a running engine keeps its files).
+set -euo pipefail
+here=$(cd "$(dirname "$0")" && pwd)
+list=${KINTSUGI_ENGINE_LIST:-$here/engines.tsv}
+engines=${KINTSUGI_ENGINES:-${XDG_DATA_HOME:-$HOME/.local/share}/kintsugi/engines}
+api=${KINTSUGI_GITHUB_API:-https://api.github.com}
+arch=$(uname -m)
+die() { echo "kintsugi-engine: $*" >&2; exit 1; }
+t=
+trap 'rm -rf "$t"' EXIT
+
+repo_of() { awk -F'\t' -v a="$1" '$1 == a { print $2 }' "$list"; }
+installed() { cat "$engines/$1/.kintsugi-release" 2>/dev/null || true; }   # "<repo> <tag>"
+
+release_json() {  # repo [tag]
+    local u=$api/repos/$1/releases/latest
+    [ -n "${2:-}" ] && u=$api/repos/$1/releases/tags/$2
+    curl -fsSL --max-time 30 -H 'Accept: application/vnd.github+json' "$u"
+}
+json_tag() { sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1; }
+json_asset() {  # suffix: the asset URL ending in it
+    grep -o '"browser_download_url": *"[^"]*"' | sed 's/.*"\([^"]*\)"$/\1/' | grep -- "$1\$" | head -1
+}
+
+install() {  # appid [tag]
+    local appid=$1 repo json tag url sum
+    repo=$(repo_of "$appid"); [ -n "$repo" ] || die "no engine known for app $appid (see $list)"
+    json=$(release_json "$repo" "${2:-}") || die "can't reach the releases of $repo"
+    tag=$(json_tag <<<"$json"); [ -n "$tag" ] || die "no release found in $repo"
+    url=$(json_asset "-linux-$arch.tar.gz" <<<"$json")
+    [ -n "$url" ] || die "$repo $tag has no build for $arch"
+    sum=$(json_asset "-linux-$arch.tar.gz.sha256" <<<"$json")
+    [ -n "$sum" ] || die "$repo $tag has no checksum for its $arch build"
+    mkdir -p "$engines"
+    rm -rf "$t"; t=$(mktemp -d "$engines/.download.XXXXXX")
+    echo "downloading $repo $tag ($arch)"
+    curl -fsSL --max-time 900 -o "$t/engine.tar.gz" "$url" || die "download failed: $url"
+    curl -fsSL --max-time 30 -o "$t/sum" "$sum" || die "download failed: $sum"
+    [ "$(cut -d' ' -f1 < "$t/sum")" = "$(sha256sum < "$t/engine.tar.gz" | cut -d' ' -f1)" ] \
+        || die "checksum mismatch for $url"
+    mkdir "$t/engine" && tar -xzf "$t/engine.tar.gz" -C "$t/engine" || die "bad archive: $url"
+    [ -x "$t/engine/run" ] || die "$url has no executable run"
+    echo "$repo $tag" > "$t/engine/.kintsugi-release"
+    # swap: the old folder is moved aside, not overwritten (a running engine keeps its files)
+    rm -rf "$engines/$appid.old"
+    [ ! -e "$engines/$appid" ] || mv "$engines/$appid" "$engines/$appid.old"
+    mv "$t/engine" "$engines/$appid"
+    rm -rf "$engines/$appid.old"
+    echo "installed $repo $tag as engine $appid"
+}
+
+update() {  # appid: install if the latest release is newer than the installed one
+    local appid=$1 cur repo json tag
+    cur=$(installed "$appid"); [ -n "$cur" ] || { echo "engine $appid: not installed from a release, left alone"; return 0; }
+    repo=${cur% *}
+    json=$(release_json "$repo") || die "can't reach the releases of $repo"
+    tag=$(json_tag <<<"$json")
+    if [ -n "$tag" ] && [ "$tag" != "${cur#* }" ]; then install "$appid" "$tag"
+    else echo "engine $appid: $cur is current"; fi
+}
+
+cmd=${1:-}; shift || true
+case $cmd in
+    list)
+        printf '%-8s %-32s %-24s %s\n' APP REPOSITORY GAME INSTALLED
+        grep -v '^#' "$list" | while IFS=$'\t' read -r a r g; do
+            [ -n "$a" ] || continue
+            i=$(installed "$a"); [ -n "$i" ] && i=${i#* }
+            [ -z "$i" ] && [ -x "$engines/$a/run" ] && i=local
+            printf '%-8s %-32s %-24s %s\n' "$a" "$r" "$g" "${i:--}"
+        done ;;
+    install) [ $# -ge 1 ] || die "usage: kintsugi-engine install <appid> [tag]"; install "$@" ;;
+    update)
+        if [ $# -eq 0 ]; then
+            for d in "$engines"/*/; do [ -f "$d.kintsugi-release" ] && update "$(basename "$d")"; done
+        else for a in "$@"; do update "$a"; done; fi ;;
+    remove) [ $# -eq 1 ] || die "usage: kintsugi-engine remove <appid>"; rm -rf "${engines:?}/$1"; echo "removed engine $1" ;;
+    *) sed -n '2,6s/^# \{0,1\}//p' "$0"; exit 2 ;;
+esac

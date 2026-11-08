@@ -1,0 +1,13 @@
+"compatibilitytools"
+{
+  "compat_tools"
+  {
+    "kintsugi"
+    {
+      "install_path" "."
+      "display_name" "Kintsugi"
+      "from_oslist" "windows"
+      "to_oslist" "linux"
+    }
+  }
+}

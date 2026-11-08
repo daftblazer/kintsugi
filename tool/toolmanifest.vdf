@@ -1,0 +1,6 @@
+"manifest"
+{
+  "version" "2"
+  "commandline" "/kintsugi %verb%"
+  "use_tool_subprocess_reaper" "1"
+}
