@@ -1,3 +1,2 @@
 # Engines Kintsugi can download: Steam app ID, GitHub repository, game. Each repository's releases carry
 # <name>-<version>-linux-<arch>.tar.gz (+ .sha256) for arch x86_64 and/or aarch64 (see README.md, "Engines").
-372360	daftblazer/kintsugi-symphonia	Tales of Symphonia

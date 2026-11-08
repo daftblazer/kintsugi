@@ -10,11 +10,9 @@ it up to date. **No engines or game files are part of this repository.**
 
 ## Engines
 
-| Steam app | Game | Engine |
-|---|---|---|
-| 372360 | Tales of Symphonia | [kintsugi-symphonia](https://github.com/daftblazer/kintsugi-symphonia) |
-
-Engines are built for x86_64 and aarch64 Linux.
+No engines are published yet. Engines listed in `tool/engines.tsv` are downloaded automatically; until
+then, an engine can be installed from a local folder (see "Writing an engine"). Engines are built for
+x86_64 and aarch64 Linux.
 
 ## Install
 
@@ -31,8 +29,8 @@ Engines are built for x86_64 and aarch64 Linux.
    `tools/install.sh` does the same (or `tools/install.sh user@host` over SSH).
 2. Restart Steam. In Game Mode that's Steam menu > Power > Restart Steam.
 3. In the game's Properties > Compatibility, enable "Force the use of a specific Steam Play
-   compatibility tool" and pick **Kintsugi**. It is listed for every Windows game, but only games in
-   the table above start.
+   compatibility tool" and pick **Kintsugi**. It is listed for every Windows game, but only games
+   with an engine start.
 
 The first start downloads the engine, so it needs a network connection. After that, the game starts
 offline too.
